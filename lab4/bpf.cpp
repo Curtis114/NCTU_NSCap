@@ -159,6 +159,7 @@ struct gre_header
 void got_packet(u_char *handle, const struct pcap_pkthdr *header, const u_char *packet)
 {
     static int cnt = 1, gre_num = 1;
+    static bool bridge_up = false;
     printf("\nPacket [%d]\n", cnt++);
 
     for (int i = 0; i < header->len; ++i)
@@ -223,12 +224,16 @@ void got_packet(u_char *handle, const struct pcap_pkthdr *header, const u_char *
                 system(cmd);
                 sprintf(cmd, "ip link set GRE%d up > /dev/null", gre_num);
                 system(cmd);
-                system("ip link add br0 type bridge > /dev/null");
-                system("brctl addif br0 BRGr-eth0 > /dev/null");
+                if (!bridge_up)
+                {
+                    system("ip link add br0 type bridge > /dev/null");
+                    system("brctl addif br0 BRGr-eth0 > /dev/null");
+                }
                 sprintf(cmd, "brctl addif br0 GRE%d > /dev/null", gre_num);
                 system(cmd);
-                system("ip link set br0 up > /dev/null");
-
+                if (!bridge_up)
+                    system("ip link set br0 up > /dev/null");
+                bridge_up = true;
                 sprintf(cmd, " and src host !%s", s_ip);
                 filter_exp += cmd;
                 gre_num++;
@@ -250,7 +255,6 @@ void got_packet(u_char *handle, const struct pcap_pkthdr *header, const u_char *
         }
         if (iphdr->ip_proto == 0x2f)
         {
-            /*
             struct gre_header *grehdr = (gre_header *)(packet + ethhdr_size + iphdr_size);
             int grehdr_size = 4;
             if (grehdr->check != 0)
@@ -261,6 +265,10 @@ void got_packet(u_char *handle, const struct pcap_pkthdr *header, const u_char *
             {
                 fprintf(stderr, "GRE protocol is not ethernet");
                 exit(1);
+            }
+            else
+            {
+                printf("GRE protocol: Transparent Ethernet Bridging\n");
             }
 
             // Parse inner ethernet header
@@ -285,6 +293,9 @@ void got_packet(u_char *handle, const struct pcap_pkthdr *header, const u_char *
                 break;
             case 0x0608:
                 printf("ARP\n");
+                break;
+            case 0xdd86:
+                printf("IPv6\n");
                 break;
             default:
                 printf("%04x\n", in_eth->ether_type);
@@ -331,15 +342,14 @@ void got_packet(u_char *handle, const struct pcap_pkthdr *header, const u_char *
                 {
                     printf("%02x ", arp->address[i]);
                 }
-                printf("\nDest MAC: ");
+                printf("\nSource IP: %u.%u.%u.%u\n", arp->address[6], arp->address[7], arp->address[8], arp->address[9]);
+                printf("Dest MAC: ");
                 for (int i = 10; i < 10 + ETHER_ADDR_LEN; ++i)
                 {
                     printf("%02x ", arp->address[i]);
                 }
-                printf("\nSource IP: %u.%u.%u.%u\n", arp->address[6], arp->address[7], arp->address[8], arp->address[9]);
-                printf("Dest IP: %u.%u.%u.%u\n", arp->address[16], arp->address[17], arp->address[18], arp->address[19]);
+                printf("\nDest IP: %u.%u.%u.%u\n", arp->address[16], arp->address[17], arp->address[18], arp->address[19]);
             }
-            */
         }
     }
 
@@ -353,13 +363,13 @@ void got_packet(u_char *handle, const struct pcap_pkthdr *header, const u_char *
         {
             printf("%02x ", arp->address[i]);
         }
-        printf("\nDest MAC: ");
+        printf("\nSource IP: %u.%u.%u.%u\n", arp->address[6], arp->address[7], arp->address[8], arp->address[9]);
+        printf("Dest MAC: ");
         for (int i = 10; i < 10 + ETHER_ADDR_LEN; ++i)
         {
             printf("%02x ", arp->address[i]);
         }
-        printf("\nSource IP: %u.%u.%u.%u\n", arp->address[6], arp->address[7], arp->address[8], arp->address[9]);
-        printf("Dest IP: %u.%u.%u.%u\n", arp->address[16], arp->address[17], arp->address[18], arp->address[19]);
+        printf("\nDest IP: %u.%u.%u.%u\n", arp->address[16], arp->address[17], arp->address[18], arp->address[19]);
     }
     return;
 }
