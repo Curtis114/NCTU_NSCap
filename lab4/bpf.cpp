@@ -78,14 +78,13 @@ int main(int argc, char *argv[])
             break;
         fprintf(stderr, "Couldn't parse filter %s: %s\n", filter_exp.c_str(), pcap_geterr(handle));
     }
-
     printf("Parsed filter with expression: %s ...\n", filter_exp.c_str());
     if (pcap_setfilter(handle, &fp) == -1)
     {
         fprintf(stderr, "Couldn't install filter %s: %s\n", filter_exp.c_str(), pcap_geterr(handle));
         return -1;
     }
-    printf("Filter installed ...\n");
+    printf("Filter installed ...\nWaiting for packets...\n");
 
     /// Parse packets
     while (1)
@@ -96,13 +95,12 @@ int main(int argc, char *argv[])
             fprintf(stderr, "Couldn't parse filter %s: %s\n", filter_exp.c_str(), pcap_geterr(handle));
             break;
         }
-        printf("Parsed filter with expression: %s ...\n", filter_exp.c_str());
         if (pcap_setfilter(handle, &fp) == -1)
         {
             fprintf(stderr, "Couldn't install filter %s: %s\n", filter_exp.c_str(), pcap_geterr(handle));
             break;
         }
-        printf("Filter installed ...\n");
+        printf("Tunnel Finished...\n");
     }
     pcap_close(handle);
     printf("End filtering\n");
@@ -192,6 +190,9 @@ void got_packet(u_char *handle, const struct pcap_pkthdr *header, const u_char *
     case 0x0608:
         printf("ARP\n");
         break;
+    case 0xdd86:
+        printf("IPv6\n");
+        break;
     default:
         printf("%04x\n", eth->ether_type);
         return;
@@ -234,7 +235,11 @@ void got_packet(u_char *handle, const struct pcap_pkthdr *header, const u_char *
                 if (!bridge_up)
                     system("ip link set br0 up > /dev/null");
                 bridge_up = true;
-                sprintf(cmd, " and src host !%s", s_ip);
+                strcpy(cmd, filter_exp.c_str());
+                if (!strtok(cmd, " \t"))
+                    sprintf(cmd, "host !%s", s_ip);
+                else
+                    sprintf(cmd, " and host !%s", s_ip);
                 filter_exp += cmd;
                 gre_num++;
                 pcap_breakloop((pcap_t *)handle);
