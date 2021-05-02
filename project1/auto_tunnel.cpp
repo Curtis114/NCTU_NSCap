@@ -161,7 +161,9 @@ void got_packet(u_char *handle, const struct pcap_pkthdr *header, const u_char *
 
     for (int i = 0; i < header->len; ++i)
     {
-        printf("%02x ", packet[i]);
+        printf("%02x", packet[i]);
+        if (i % 2 == 1)
+            printf(" ");
         if (i % 16 == 15)
             printf("\n");
     }
@@ -212,9 +214,6 @@ void got_packet(u_char *handle, const struct pcap_pkthdr *header, const u_char *
         printf("Next layer protocol: ");
         switch (iphdr->ip_proto)
         {
-        case 0x2f:
-            printf("GRE\n");
-            break;
         case 0x01:
             printf("ICMP\n");
             break;
@@ -238,9 +237,29 @@ void got_packet(u_char *handle, const struct pcap_pkthdr *header, const u_char *
             printf("Source Port: %u\n", sport);
             struct gre_header *test = (gre_header *)(packet + ethhdr_size + iphdr_size + udphdr_size);
             int grehdr_size = 4;
+            u_int key = 0;
+            int checksum = -1, seq = -1;
             if (test->check != 0)
             {
-                grehdr_size += 4;
+                if ((test->check & (0x8 << 4)) != 0) // Check sum bit
+                {
+                    u_int *c = (u_int *)(packet + ethhdr_size + iphdr_size + udphdr_size + grehdr_size);
+                    grehdr_size += 4;
+                    checksum = *c;
+                }
+                if ((test->check & (0x2 << 4)) != 0) // Key bit
+                {
+                    u_int *k = (u_int *)(packet + ethhdr_size + iphdr_size + udphdr_size + grehdr_size);
+                    grehdr_size += 4;
+                    key = *k;
+                    key = ((key & 0xff) << 24) + (((key >> 8) & 0xff) << 16) + (((key >> 16) & 0xff) << 8) + ((key >> 24) & 0xff);
+                }
+                if ((test->check & (0x1 << 4)) != 0) // Sequence number bit
+                {
+                    u_int *s = (u_int *)(packet + ethhdr_size + iphdr_size + udphdr_size + grehdr_size);
+                    grehdr_size += 4;
+                    seq = *s;
+                }
             }
             if (test->proto == 0x5865)
             {
@@ -262,7 +281,10 @@ void got_packet(u_char *handle, const struct pcap_pkthdr *header, const u_char *
                     }
                     if (!is_built || tunnels.empty())
                     {
-                        sprintf(cmd, "ip link add GRE%d type gretap remote %s local 140.113.0.2 encap fou encap-sport 55555 encap-dport %u key %u", gre_num, s_ip, sport, sport);
+                        if (key != 0)
+                            sprintf(cmd, "ip link add GRE%d type gretap remote %s local 140.113.0.2 encap fou encap-sport 55555 encap-dport %u key %u", gre_num, s_ip, sport, key);
+                        else
+                            sprintf(cmd, "ip link add GRE%d type gretap remote %s local 140.113.0.2 encap fou encap-sport 55555 encap-dport %u", gre_num, s_ip, sport);
                         system(cmd);
                         sprintf(cmd, "ip link set GRE%d up", gre_num);
                         system(cmd);
