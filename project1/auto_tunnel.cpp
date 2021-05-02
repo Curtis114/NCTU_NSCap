@@ -145,17 +145,6 @@ struct udp_header
     u_short checksum;
 };
 
-/* ARP Header */
-struct arp_header
-{
-    u_short htype;
-    u_short ptype;
-    u_char hlen;
-    u_char plen;
-    u_short oper;
-    u_char address[20]; /* Source MAC (6 bytes), Source IP (4 bytes), Dest MAC (6 bytes), Dest IP (4 bytes) */
-};
-
 /* GRE Header */
 struct gre_header
 {
@@ -167,6 +156,7 @@ void got_packet(u_char *handle, const struct pcap_pkthdr *header, const u_char *
 {
     static int cnt = 1, gre_num = 1;
     static bool bridge_up = false;
+    static vector<pair<u_int, u_int>> tunnels;
     printf("\nPacket [%d]\n", cnt++);
 
     for (int i = 0; i < header->len; ++i)
@@ -261,31 +251,44 @@ void got_packet(u_char *handle, const struct pcap_pkthdr *header, const u_char *
                 // Build GRE tunnel
                 if (strcmp(s_ip, "140.113.0.2") != 0)
                 {
-                    sprintf(cmd, "ip link add GRE%d type gretap remote %s local 140.113.0.2 encap fou encap-sport 55555 encap-dport %u", gre_num, s_ip, sport);
-                    system(cmd);
-                    sprintf(cmd, "ip link set GRE%d up", gre_num);
-                    system(cmd);
-                    if (!bridge_up)
+                    bool is_built = false;
+                    for (auto it = tunnels.begin(); it != tunnels.end(); ++it)
                     {
-                        system("ip link add br0 type bridge");
-                        system("brctl addif br0 BRGr-eth1");
+                        if ((*it).first == iphdr->ip_src.s_addr && (*it).second == sport)
+                        {
+                            is_built = true;
+                            break;
+                        }
                     }
-                    sprintf(cmd, "brctl addif br0 GRE%d", gre_num);
-                    system(cmd);
-                    if (!bridge_up)
+                    if (!is_built || tunnels.empty())
                     {
-                        system("ip link set br0 up");
-                        system("ip fou add port 55555 ipproto 47");
+                        sprintf(cmd, "ip link add GRE%d type gretap remote %s local 140.113.0.2 encap fou encap-sport 55555 encap-dport %u key %u", gre_num, s_ip, sport, sport);
+                        system(cmd);
+                        sprintf(cmd, "ip link set GRE%d up", gre_num);
+                        system(cmd);
+                        if (!bridge_up)
+                        {
+                            system("ip link add br0 type bridge");
+                            system("brctl addif br0 BRGr-eth1");
+                        }
+                        sprintf(cmd, "brctl addif br0 GRE%d", gre_num);
+                        system(cmd);
+                        if (!bridge_up)
+                        {
+                            system("ip link set br0 up");
+                            system("ip fou add port 55555 ipproto 47");
+                        }
+                        bridge_up = true;
+                        tunnels.push_back(make_pair(iphdr->ip_src.s_addr, sport));
+                        strcpy(cmd, filter_exp.c_str());
+                        if (!strtok(cmd, " \t"))
+                            sprintf(cmd, "port !%u", sport);
+                        else
+                            sprintf(cmd, " and port !%u", sport);
+                        filter_exp += cmd;
+                        gre_num++;
+                        pcap_breakloop((pcap_t *)handle);
                     }
-                    bridge_up = true;
-                    strcpy(cmd, filter_exp.c_str());
-                    if (!strtok(cmd, " \t"))
-                        sprintf(cmd, "host !%s", s_ip);
-                    else
-                        sprintf(cmd, " and host !%s", s_ip);
-                    filter_exp += cmd;
-                    gre_num++;
-                    pcap_breakloop((pcap_t *)handle);
                 }
 
                 // Parse inner ethernet header
@@ -322,7 +325,7 @@ void got_packet(u_char *handle, const struct pcap_pkthdr *header, const u_char *
                 // Parse inner IP header
                 if (in_eth->ether_type == 0x0008)
                 {
-                    const ip_header *in_iphdr = (ip_header *)(packet + ethhdr_size + iphdr_size + grehdr_size + in_ethhdr_size);
+                    const ip_header *in_iphdr = (ip_header *)(packet + ethhdr_size + iphdr_size + udphdr_size + grehdr_size + in_ethhdr_size);
                     const int in_iphdr_size = IP_HDRLEN(in_iphdr) * 4;
                     if (in_iphdr_size < 20)
                     {
@@ -348,46 +351,8 @@ void got_packet(u_char *handle, const struct pcap_pkthdr *header, const u_char *
                         break;
                     }
                 }
-
-                // Parse inner ARP header
-                else if (in_eth->ether_type == 0x0608)
-                {
-                    const arp_header *arp = (arp_header *)(packet + ethhdr_size + iphdr_size + grehdr_size + in_ethhdr_size);
-                    printf("Operation: %s\n", (arp->oper == 0x0100) ? "Request" : "Reply");
-                    printf("Source MAC: ");
-                    for (int i = 0; i < ETHER_ADDR_LEN; ++i)
-                    {
-                        printf("%02x ", arp->address[i]);
-                    }
-                    printf("\nSource IP: %u.%u.%u.%u\n", arp->address[6], arp->address[7], arp->address[8], arp->address[9]);
-                    printf("Dest MAC: ");
-                    for (int i = 10; i < 10 + ETHER_ADDR_LEN; ++i)
-                    {
-                        printf("%02x ", arp->address[i]);
-                    }
-                    printf("\nDest IP: %u.%u.%u.%u\n", arp->address[16], arp->address[17], arp->address[18], arp->address[19]);
-                }
             }
         }
-    }
-
-    // Parse ARP Header
-    else if (eth->ether_type == 0x0608)
-    {
-        const arp_header *arp = (arp_header *)(packet + ethhdr_size);
-        printf("Operation: %s\n", (arp->oper == 0x0100) ? "Request" : "Reply");
-        printf("Source MAC: ");
-        for (int i = 0; i < ETHER_ADDR_LEN; ++i)
-        {
-            printf("%02x ", arp->address[i]);
-        }
-        printf("\nSource IP: %u.%u.%u.%u\n", arp->address[6], arp->address[7], arp->address[8], arp->address[9]);
-        printf("Dest MAC: ");
-        for (int i = 10; i < 10 + ETHER_ADDR_LEN; ++i)
-        {
-            printf("%02x ", arp->address[i]);
-        }
-        printf("\nDest IP: %u.%u.%u.%u\n", arp->address[16], arp->address[17], arp->address[18], arp->address[19]);
     }
     return;
 }
